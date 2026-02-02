@@ -1,0 +1,13 @@
+*.o
+*.d
+*.swp
+*.eep
+*.hex
+*.map
+midiknobs
+*.pdf
+*.lck
+_autosave-*
+*.kicad_prl
+*-backups
+\#auto_saved_files\#
