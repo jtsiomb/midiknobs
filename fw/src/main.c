@@ -6,8 +6,6 @@
 #include "midi.h"
 #include "serial.h"
 
-uint8_t dbgmode;
-
 #define USE_ADC
 
 #ifdef USE_ADC
@@ -23,16 +21,27 @@ uint8_t cur_adc;
 volatile uint8_t nconv;
 #endif
 
+#define TIMER_INTR_HZ		10
+#define TIMER_CNT			(F_CPU / 8 / TIMER_INTR_HZ)
+static int8_t rotacc;
+static uint8_t rot_pending;
+
 #define CC_NUM_BASE		20
-#define CC_NUM_BN0		(CC_NUM_BASE + NUM_VAL + 1)
+#define CC_NUM_ROT		(CC_NUM_BASE + NUM_VAL)
+#define CC_NUM_BN0		(CC_NUM_ROT + 1)
+
+#ifdef DEBUG_ENABLE
+uint8_t dbgmode;
+#endif
 
 uint8_t filter_adc(uint8_t idx);
 
 int main(void)
 {
 	uint8_t i, chan, bnstate, bndiff, prev_bnstate = 0;
+	int8_t cur_rot;
 
-	DDRC = 0;
+	DDRC = 0x20;
 	DDRB = 0x80;
 	DDRD = 0;
 	/* enable pull-ups */
@@ -40,15 +49,23 @@ int main(void)
 	PORTB = 0xff;
 	PORTD = 0xff;
 
+#ifdef DEBUG_ENABLE
 	if((PINC & 0x20) == 0) {
 		/* debug mode */
 		dbgmode = 1;
 		init_serial(0, 9600, 8, PAR_NONE, 1);
 		printf("midiknobs debug mode...\n");
 	} else {
+#endif
 		/* MIDI mode */
 		init_serial(0, 31250, 8, PAR_NONE, 1);
+#ifdef DEBUG_ENABLE
 	}
+#endif
+
+	PCICR |= 1 << PCIE2;	/* enable pin change interrupt 2 (PCINT16..23) */
+	/* unmask pin change intr for D2,D3 */
+	PCMSK2 |= (1 << PCINT18) | (1 << PCINT19);
 
 #ifdef USE_ADC
 	DIDR0 |= 3;	/* disable digital input for ADC0,ADC1 pins */
@@ -60,6 +77,12 @@ int main(void)
 
 	/* kick off the ADC conversions */
 	ADCSRA |= 1 << ADSC;
+
+	/* timer setup: Clear Timer on Compare (CTC) mode, div8 clock */
+	TCCR1B |= (1 << WGM12) | (1 << CS11);
+	OCR1AH = TIMER_CNT >> 8;
+	OCR1AL = TIMER_CNT & 0xff;
+	TIMSK1 |= 1 << OCIE1A;
 
 	sei();
 
@@ -89,7 +112,18 @@ int main(void)
 		}
 #endif
 
-		/* TODO rotary */
+		if(rot_pending) {
+			cli();
+			cur_rot = rotacc;
+			rotacc = 0;
+			sei();
+			if(cur_rot) {
+				midi_value(chan, CC_NUM_ROT, cur_rot + 64);
+			} else {
+				midi_value(chan, CC_NUM_ROT, 0);
+				rot_pending = 0;
+			}
+		}
 
 		bnstate = ~PIND >> 4;
 		bndiff = bnstate ^ prev_bnstate;
@@ -133,9 +167,6 @@ ISR(ADC_vect)
 
 	next = (cur_adc + 1) & (NUM_VAL - 1);
 
-	/* to measure conversion frequency */
-	PORTB = (PORTB & 0x7f) | (next << 7);
-
 	/* change the input and start the next conversion */
 	ADMUX = (ADMUX & 0xf0) | next;
 	ADCSRA |= 1 << ADSC;
@@ -143,3 +174,51 @@ ISR(ADC_vect)
 	nconv++;
 }
 #endif
+
+/* prev		inc		dec
+ * 00		01		10
+ * 01		11		00
+ * 11		10		01
+ * 10		00		11
+ */
+static const int8_t dir[] = {
+	0,		/* 00 -> 00 */
+	1,		/* 01 -> 00 */
+	-1,		/* 10 -> 00 */
+	0,		/* 11 -> 00 (invalid) */
+	-1,		/* 00 -> 01 */
+	0,		/* 01 -> 01 */
+	0,		/* 10 -> 01 (invalid) */
+	1,		/* 11 -> 01 */
+	1,		/* 00 -> 10 */
+	0,		/* 01 -> 10 (invalid) */
+	0,		/* 10 -> 10 */
+	-1,		/* 11 -> 10 */
+	0,		/* 00 -> 11 (invalid) */
+	-1,		/* 01 -> 11 */
+	1,		/* 10 -> 11 */
+	0		/* 11 -> 11 */
+};
+
+ISR(PCINT2_vect)
+{
+	static uint8_t state;
+	int8_t delta;
+
+	state = (state >> 2) | (PIND & 0xc);
+	delta = dir[state];
+
+	if(delta > 0) {
+		if(rotacc < 63) rotacc++;
+	} else if(delta < 0) {
+		if(rotacc > -63) rotacc--;
+	}
+}
+
+ISR(TIMER1_COMPA_vect)
+{
+	/* it's time to check the rotary value and transmit */
+	if(rotacc) {
+		rot_pending = 1;
+	}
+}

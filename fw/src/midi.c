@@ -5,7 +5,9 @@
 
 #define UART	0
 
+#ifdef DEBUG_ENABLE
 extern uint8_t dbgmode;
+#endif
 
 void midi_all_off(void)
 {
@@ -26,13 +28,17 @@ void midi_note(int chan, int note, int vel)
 
 void midi_value(int chan, int ctlnum, int val)
 {
+#ifdef DEBUG_ENABLE
 	if(dbgmode) {
 		val &= 0x7f;
 		printf("%2x %2x %2x\t[%d] CC(%d): %d\n", MIDI_CMD_CC | chan, ctlnum, val,
 				chan, ctlnum, val);
 	} else {
+#endif
 		uart_write(UART, MIDI_CMD_CC | chan);
 		uart_write(UART, ctlnum);
 		uart_write(UART, val & 0x7f);
+#ifdef DEBUG_ENABLE
 	}
+#endif
 }
