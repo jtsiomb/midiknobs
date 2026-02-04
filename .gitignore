@@ -11,3 +11,6 @@ _autosave-*
 *.kicad_prl
 *-backups
 \#auto_saved_files\#
+*.gcode
+*.stl
+*-bak
