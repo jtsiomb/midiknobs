@@ -29,10 +29,15 @@ static uint8_t rot_pending;
 #define CC_NUM_BASE		20
 #define CC_NUM_ROT		(CC_NUM_BASE + NUM_VAL)
 #define CC_NUM_BN0		(CC_NUM_ROT + 1)
+#define CC_TOTAL		(NUM_VAL + 3)
 
 #ifdef DEBUG_ENABLE
 uint8_t dbgmode;
 #endif
+
+static uint8_t ctrlno[CC_TOTAL];
+static uint8_t alt_map;
+static int alt_curprog;
 
 uint8_t filter_adc(uint8_t idx);
 
@@ -62,6 +67,19 @@ int main(void)
 #ifdef DEBUG_ENABLE
 	}
 #endif
+
+	/* both buttons pressed at start, alt CC mapping */
+	if(((PIND >> 4) & 3) == 0) {
+		ctrlno[0] = 1;		/* modulation */
+		ctrlno[1] = 91;		/* reverb */
+		ctrlno[3] = 64;		/* damper/sustain */
+		ctrlno[4] = 65;		/* portamento */
+		alt_map = 1;
+	} else {
+		for(i=0; i<CC_TOTAL; i++) {
+			ctrlno[i] = CC_NUM_BASE + i;
+		}
+	}
 
 	PCICR |= 1 << PCIE2;	/* enable pin change interrupt 2 (PCINT16..23) */
 	/* unmask pin change intr for D2,D3 */
@@ -95,7 +113,7 @@ int main(void)
 	for(i=0; i<NUM_VAL; i++) {
 		uint8_t val = filter_adc(i) >> 1;
 		adc[i].prev_val = val;
-		midi_value(chan, CC_NUM_BASE + i, val);
+		midi_value(chan, ctrlno[i], val);
 	}
 #endif
 
@@ -106,7 +124,7 @@ int main(void)
 		for(i=0; i<NUM_VAL; i++) {
 			uint8_t val = filter_adc(i) >> 1;
 			if(val != adc[i].prev_val) {
-				midi_value(chan, CC_NUM_BASE + i, val);
+				midi_value(chan, ctrlno[i], val);
 				adc[i].prev_val = val;
 			}
 		}
@@ -117,11 +135,28 @@ int main(void)
 			cur_rot = rotacc;
 			rotacc = 0;
 			sei();
-			if(cur_rot) {
-				midi_value(chan, CC_NUM_ROT, cur_rot + 64);
-			} else {
-				midi_value(chan, CC_NUM_ROT, 0);
+
+			if(cur_rot == 2) cur_rot = 1;
+			else if(cur_rot == -2) cur_rot = -1;
+
+			if(alt_map) {
+				if(cur_rot) {
+					alt_curprog += cur_rot;
+					if(alt_curprog < 0) {
+						alt_curprog = 0;
+					} else if(alt_curprog > 127) {
+						alt_curprog = 127;
+					}
+					midi_progchg(chan, alt_curprog);
+				}
 				rot_pending = 0;
+			} else {
+				if(cur_rot) {
+					midi_value(chan, CC_NUM_ROT, cur_rot + 64);
+				} else {
+					midi_value(chan, CC_NUM_ROT, 0);
+					rot_pending = 0;
+				}
 			}
 		}
 
@@ -131,7 +166,7 @@ int main(void)
 
 		for(i=0; i<4; i++) {
 			if(bndiff & 1) {
-				midi_value(chan, CC_NUM_BN0 + i, bnstate & 1 ? 127 : 0);
+				midi_value(chan, ctrlno[CC_NUM_BN0 - CC_NUM_BASE], bnstate & 1 ? 127 : 0);
 			}
 			bnstate >>= 1;
 			bndiff >>= 1;

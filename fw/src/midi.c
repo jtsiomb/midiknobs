@@ -9,6 +9,8 @@
 extern uint8_t dbgmode;
 #endif
 
+static uint8_t prev_st;
+
 void midi_all_off(void)
 {
 	uart_write(UART, MIDI_CMD_CHANMSG);
@@ -17,10 +19,10 @@ void midi_all_off(void)
 
 void midi_note(int chan, int note, int vel)
 {
-	if(vel > 0) {
+	uint8_t st = MIDI_CMD_NOTEON | chan;
+	if(prev_st != st) {
+		prev_st = st;
 		uart_write(UART, MIDI_CMD_NOTEON | chan);
-	} else {
-		uart_write(UART, MIDI_CMD_NOTEOFF | chan);
 	}
 	uart_write(UART, note);
 	uart_write(UART, vel & 0x7f);
@@ -35,10 +37,24 @@ void midi_value(int chan, int ctlnum, int val)
 				chan, ctlnum, val);
 	} else {
 #endif
-		uart_write(UART, MIDI_CMD_CC | chan);
+		uint8_t st = MIDI_CMD_CC | chan;
+		if(prev_st != st) {
+			prev_st = st;
+			uart_write(UART, st);
+		}
 		uart_write(UART, ctlnum);
 		uart_write(UART, val & 0x7f);
 #ifdef DEBUG_ENABLE
 	}
 #endif
+}
+
+void midi_progchg(int chan, int prog)
+{
+	uint8_t st = MIDI_CMD_PROGCHG | chan;
+	if(prev_st != st) {
+		prev_st = st;
+		uart_write(UART, st);
+	}
+	uart_write(UART, prog & 0x7f);
 }
